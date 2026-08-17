@@ -242,9 +242,9 @@
         // CONFIGURAÇÃO: Ao clicar no cluster, abre em espiral sem dar zoom no mapa
         const busClusterGroup = L.markerClusterGroup({
             maxClusterRadius: 40,
-            zoomToBoundsOnClick: false, // Impede de aproximar o zoom ao clicar
+            zoomToBoundsOnClick: false,
             spiderfyOnMaxZoom: true,
-            spiderfyDistanceMultiplier: 1.5, // Dá mais espaço para caberem os badges
+            spiderfyDistanceMultiplier: 1.5,
             showCoverageOnHover: false,
             spiderLegPolylineOptions: { 
                 weight: 2, 
@@ -284,11 +284,34 @@
 
         async function carregarTracado() { try { const res = await fetch('json/tracado-geral.json'); if (res.ok) { const data = await res.json(); dadosTracado = data.tracados || data; } } catch (e) { console.error(e); } }
 
+        function isHoje(data) {
+            if (!data) return false;
+            const hoje = new Date();
+            return data.getDate() === hoje.getDate() &&
+                   data.getMonth() === hoje.getMonth() &&
+                   data.getFullYear() === hoje.getFullYear();
+        }
+
         async function atualizarDados() {
             try {
                 const req = await fetch(BASE_API_URL);
                 const json = await req.json();
-                todosDados = json.map(v => ({ properties: { prefixo: v.prefixo, cd_linha: v.linha || "", latitude: v.latitude, longitude: v.longitude, velocidade: v.velocidade || 0, datalocal: v.data_local, sentido: v.sentido } }));
+                
+                // Filtro: remove veículos que não enviaram sinal hoje
+                const dadosHoje = json.filter(v => isHoje(parseData(v.data_local)));
+
+                todosDados = dadosHoje.map(v => ({ 
+                    properties: { 
+                        prefixo: v.prefixo, 
+                        cd_linha: v.linha || "", 
+                        latitude: v.latitude, 
+                        longitude: v.longitude, 
+                        velocidade: v.velocidade || 0, 
+                        datalocal: v.data_local, 
+                        sentido: v.sentido 
+                    } 
+                }));
+
                 if (itemSelecionado) { 
                     const match = todosDados.find(f => String(f.properties.prefixo) === String(itemSelecionado.prefixo)); 
                     if (match) { 
@@ -337,7 +360,6 @@
                 
                 let isAlvoEspecifico = (itemSelecionado && String(itemSelecionado.prefixo) === id);
                 
-                // LÓGICA DE BUSCA PRECISA (Diferencia Linha de Prefixo)
                 if (!isAlvoEspecifico && temBusca) {
                     isAlvoEspecifico = termosBusca.some(t => {
                         const termo = String(t).trim().toLowerCase();
@@ -510,7 +532,6 @@
         function initSwipe() { const sheet = document.getElementById('bottom-sheet'); let startY = 0, currentY = 0, startTime = 0; sheet.addEventListener('touchstart', (e) => { startY = e.touches[0].clientY; startTime = Date.now(); sheet.style.transition = 'none'; }, {passive: true}); sheet.addEventListener('touchmove', (e) => { currentY = e.touches[0].clientY; const diff = currentY - startY; if (diff > 0) sheet.style.transform = `translateY(${diff}px)`; }, {passive: true}); sheet.addEventListener('touchend', (e) => { const diff = currentY - startY; const duration = Date.now() - startTime; const velocity = diff / duration; sheet.style.transition = 'transform 0.3s cubic-bezier(0.1, 0.5, 0.1, 1)'; if (diff > 120 || velocity > 0.5) closeBottomSheet(); else sheet.style.transform = 'translateY(0)'; startY = 0; currentY = 0; }); }
         function closeBottomSheet() { const sheet = document.getElementById('bottom-sheet'); sheet.style.transform = 'translateY(110%)'; sheet.classList.remove('active'); document.body.classList.remove('sheet-open'); }
         
-        // REGRA DE PREFIXOS E IDENTIFICAÇÃO DE EMPRESAS
         function getEmpresa(p) { 
             const s = String(p || '').trim();
             if (!/^\d{6}$/.test(s)) return 'Outros';
@@ -547,7 +568,6 @@
         function desenharTracado(cd, emp, sApi) { limparTracado(); if (!dadosTracado) return; const cands = dadosTracado.filter(x => String(x.linha) === String(cd)); if (!cands.length) return; let rota = cands.find(c => c.sentido === "CIRCULAR") || cands.find(c => c.sentido === (sApi === '0' ? 'I' : 'V')) || cands[0]; const coords = rota.coordenadas; const cor = CORES[emp] || '#000'; linhasTracado.push(L.polyline(coords, { color: '#ffffff', weight: 6, opacity: 0.8 }).addTo(map)); linhasTracado.push(L.polyline(coords, { color: cor, weight: 3, opacity: 1 }).addTo(map)); }
         function limparTracado() { linhasTracado.forEach(l => map.removeLayer(l)); linhasTracado = []; }
 
-        /* === LÓGICA DE PESQUISA === */
         const searchInput = document.getElementById('search');
         let highlightedIndex = -1;
         searchInput.addEventListener('input', (e) => { 
