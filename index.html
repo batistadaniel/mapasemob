@@ -118,11 +118,19 @@
             border: none;
         }
 
+        .bus-marker-wrapper {
+            position: relative;
+            width: 0;
+            height: 0;
+        }
+
         .bus-marker-inner { 
             position: absolute; 
             transform: translate(-50%, -100%); 
             pointer-events: auto; 
             cursor: pointer; 
+            transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+            z-index: 10;
         }
         
         .bus-badge {
@@ -141,7 +149,7 @@
             gap: 4px;
         }
 
-        /* Ponta do Balão / Pino apontando para baixo */
+        /* Ponta Padrão do Balão */
         .bus-badge::after {
             content: '';
             position: absolute;
@@ -155,6 +163,34 @@
             border-top: 7px solid #000000;
         }
 
+        /* Quando o badge está deslocado, remove a ponta e ativa a linha envergada */
+        .is-offset .bus-badge::after {
+            display: none;
+        }
+
+        /* Linha SVG conectora curva */
+        .leader-line-svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            overflow: visible;
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        .leader-dot {
+            position: absolute;
+            top: -3.5px;
+            left: -3.5px;
+            width: 7px;
+            height: 7px;
+            background: #000000;
+            border-radius: 50%;
+            box-shadow: 0 0 0 2px #ffffff;
+            z-index: 6;
+            pointer-events: none;
+        }
+
         .bus-prefixo-highlight {
             padding: 1px 4px;
             border-radius: 4px;
@@ -162,7 +198,6 @@
             font-weight: 800;
         }
 
-        /* Customização dos clusters de contagem */
         .marker-cluster {
             background-clip: padding-box;
             border-radius: 50%;
@@ -239,7 +274,6 @@
         const map = L.map('map', { zoomControl: false, tap: true }).setView([-15.7942, -47.8822], 11);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { detectRetina: true }).addTo(map);
 
-        // CONFIGURAÇÃO: Cluster (Mapa Geral)
         const busClusterGroup = L.markerClusterGroup({
             maxClusterRadius: 40,
             zoomToBoundsOnClick: false,
@@ -254,7 +288,6 @@
             }
         });
 
-        // Layer normal para quando houver pesquisa ou item clicado (Sem Cluster)
         const busLayer = L.featureGroup();
 
         busClusterGroup.on('clusterclick', function (a) {
@@ -282,6 +315,13 @@
                 }
             }, 1000);
 
+            // Reajusta a dispersão dos badges dinamicamente ao mover ou dar zoom no mapa
+            map.on('move moveend zoomend', () => {
+                if (clusterAtivo === false) {
+                    aplicarAntiColisao();
+                }
+            });
+
             initSwipe();
         }
 
@@ -300,7 +340,6 @@
                 const req = await fetch(BASE_API_URL);
                 const json = await req.json();
                 
-                // Filtro: remove veículos que não enviaram sinal hoje
                 const dadosHoje = json.filter(v => isHoje(parseData(v.data_local)));
 
                 todosDados = dadosHoje.map(v => ({ 
@@ -353,9 +392,8 @@
         function renderizarMapa() {
             const temBusca = termosBusca.length > 0, temSelecao = !!itemSelecionado;
             modoAmostragem = !(temBusca || temSelecao);
-            const usarCluster = modoAmostragem; // Cluster apenas quando não há busca nem seleção
+            const usarCluster = modoAmostragem;
 
-            // Alternância dinâmica entre Cluster e Layer direta
             if (clusterAtivo !== usarCluster) {
                 busClusterGroup.clearLayers();
                 busLayer.clearLayers();
@@ -412,24 +450,29 @@
                 const dLocal = parseData(p.datalocal);
                 const dataHoraFormatted = formatDataHoraBadge(dLocal);
 
+                const innerBadgeHtml = `
+                    <div class="bus-badge" id="bus-badge-${id}">
+                        <span>${linhaTxt}</span>
+                        <span>|</span>
+                        <span class="bus-prefixo-highlight" style="background:${cor}">${p.prefixo}</span>
+                        <span>|</span>
+                        <span>${empresa}</span>
+                        <span>|</span>
+                        <span>${dataHoraFormatted}</span>
+                    </div>`;
+
                 const htmlIcon = `
-                    <div class="bus-marker-inner">
-                        <div class="bus-badge">
-                            <span>${linhaTxt}</span>
-                            <span>|</span>
-                            <span class="bus-prefixo-highlight" style="background:${cor}">${p.prefixo}</span>
-                            <span>|</span>
-                            <span>${empresa}</span>
-                            <span>|</span>
-                            <span>${dataHoraFormatted}</span>
+                    <div class="bus-marker-wrapper" id="bus-wrapper-${id}">
+                        <div class="bus-marker-inner" id="bus-inner-${id}">
+                            ${innerBadgeHtml}
                         </div>
                     </div>`;
 
                 if (markersRegistry[id]) {
                     const mk = markersRegistry[id];
                     mk.setLatLng([p.latitude, p.longitude]);
-                    const el = mk.getElement();
-                    if (el) el.innerHTML = htmlIcon; 
+                    const elInner = document.getElementById(`bus-inner-${id}`);
+                    if (elInner) elInner.innerHTML = innerBadgeHtml;
                     
                     if (mk.isPopupOpen() && isAlvoEspecifico) {
                         mk.setPopupContent(criarConteudoPopup(p, empresa));
@@ -470,6 +513,143 @@
                     delete markersRegistry[id]; 
                 }
             }
+
+            if (!usarCluster) {
+                requestAnimationFrame(aplicarAntiColisao);
+            }
+        }
+
+        /* === SISTEMA DINÂMICO DE ANTI-COLISÃO, ENVERGADURA E ANCORAGEM LATERAL === */
+        function aplicarAntiColisao() {
+            const markers = Object.keys(markersRegistry).map(id => ({
+                id,
+                marker: markersRegistry[id],
+                pos: map.latLngToContainerPoint(markersRegistry[id].getLatLng())
+            }));
+
+            const clusters = [];
+            const visitados = new Set();
+            const DISTANCIA_COLISAO = 50;
+
+            for (let i = 0; i < markers.length; i++) {
+                if (visitados.has(markers[i].id)) continue;
+                const grupo = [markers[i]];
+                visitados.add(markers[i].id);
+
+                for (let j = i + 1; j < markers.length; j++) {
+                    if (visitados.has(markers[j].id)) continue;
+                    const d = markers[i].pos.distanceTo(markers[j].pos);
+                    if (d < DISTANCIA_COLISAO) {
+                        grupo.push(markers[j]);
+                        visitados.add(markers[j].id);
+                    }
+                }
+                clusters.push(grupo);
+            }
+
+            clusters.forEach(grupo => {
+                if (grupo.length === 1) {
+                    resetarPosicaoBadge(grupo[0].id);
+                } else if (grupo.length === 2) {
+                    // 2 sobrepostos: um para cima com leve inclinação e outro para baixo
+                    deslocarBadge(grupo[0].id, 15, -45);
+                    deslocarBadge(grupo[1].id, -15, 45);
+                } else {
+                    // 3 ou mais: espalhamento radial com raio dinâmico
+                    const raio = 50 + (grupo.length * 7);
+                    const passoAngulo = (2 * Math.PI) / grupo.length;
+                    grupo.forEach((item, index) => {
+                        const angulo = index * passoAngulo - (Math.PI / 2);
+                        const offsetX = Math.round(Math.cos(angulo) * raio);
+                        const offsetY = Math.round(Math.sin(angulo) * raio);
+                        deslocarBadge(item.id, offsetX, offsetY);
+                    });
+                }
+            });
+        }
+
+        function resetarPosicaoBadge(id) {
+            const wrapper = document.getElementById(`bus-wrapper-${id}`);
+            const inner = document.getElementById(`bus-inner-${id}`);
+            if (!inner || !wrapper) return;
+
+            inner.style.transform = 'translate(-50%, -100%)';
+            inner.classList.remove('is-offset');
+
+            const svgAntigo = wrapper.querySelector('.leader-line-svg');
+            if (svgAntigo) svgAntigo.remove();
+            const dotAntigo = wrapper.querySelector('.leader-dot');
+            if (dotAntigo) dotAntigo.remove();
+        }
+
+        function deslocarBadge(id, offsetX, offsetY) {
+            const wrapper = document.getElementById(`bus-wrapper-${id}`);
+            const inner = document.getElementById(`bus-inner-${id}`);
+            const badge = document.getElementById(`bus-badge-${id}`);
+            if (!inner || !wrapper || !badge) return;
+
+            inner.style.transform = `translate(calc(-50% + ${offsetX}px), calc(-100% + ${offsetY}px))`;
+            inner.classList.add('is-offset');
+
+            let svg = wrapper.querySelector('.leader-line-svg');
+            let dot = wrapper.querySelector('.leader-dot');
+
+            if (!svg) {
+                svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                svg.setAttribute("class", "leader-line-svg");
+                wrapper.appendChild(svg);
+            }
+            if (!dot) {
+                dot = document.createElement("div");
+                dot.setAttribute("class", "leader-dot");
+                wrapper.appendChild(dot);
+            }
+
+            // Dimensões do badge para cálculo exato de ancoragem na borda externa
+            const rect = badge.getBoundingClientRect();
+            const w = rect.width || 120;
+            const h = rect.height || 26;
+
+            const halfW = w / 2;
+            const halfH = h / 2;
+
+            // Vetor que vai do centro do badge até a coordenada do veículo (0,0)
+            const dirX = -offsetX;
+            const dirY = -(offsetY - halfH);
+
+            let edgeX = 0, edgeY = 0;
+
+            // Calcula a interseção exata com o retângulo do badge (Laterais/Top/Bottom)
+            if (Math.abs(dirX) * halfH > Math.abs(dirY) * halfW) {
+                edgeX = dirX > 0 ? halfW : -halfW; // Borda Lateral Direita ou Esquerda
+                edgeY = (dirY / Math.abs(dirX)) * halfW;
+            } else {
+                edgeY = dirY > 0 ? halfH : -halfH; // Borda Inferior ou Superior
+                edgeX = (dirX / Math.abs(dirY)) * halfH;
+            }
+
+            // Ponto de início na borda externa do badge
+            const startX = offsetX + edgeX;
+            const startY = (offsetY - halfH) + edgeY;
+
+            // Curvatura dinâmica orgânica (Curva de Bézier quadrática)
+            const midX = (startX + 0) / 2;
+            const midY = (startY + 0) / 2;
+            const normalX = -(startY - 0) * 0.25;
+            const normalY = (startX - 0) * 0.25;
+            
+            const ctrlX = midX + normalX;
+            const ctrlY = midY + normalY;
+
+            svg.innerHTML = `
+                <path d="M ${startX} ${startY} Q ${ctrlX} ${ctrlY} 0 0" 
+                      fill="none" 
+                      stroke="#000000" 
+                      stroke-width="1.8" 
+                      stroke-dasharray="3,3" 
+                      opacity="0.8" 
+                      stroke-linecap="round" />
+            `;
         }
 
         function criarConteudoPopup(p, empresa) {
