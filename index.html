@@ -239,7 +239,7 @@
         const map = L.map('map', { zoomControl: false, tap: true }).setView([-15.7942, -47.8822], 11);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { detectRetina: true }).addTo(map);
 
-        // CONFIGURAÇÃO: Ao clicar no cluster, abre em espiral sem dar zoom no mapa
+        // CONFIGURAÇÃO: Cluster (Mapa Geral)
         const busClusterGroup = L.markerClusterGroup({
             maxClusterRadius: 40,
             zoomToBoundsOnClick: false,
@@ -252,14 +252,17 @@
                 opacity: 0.7,
                 dashArray: '4, 4'
             }
-        }).addTo(map);
+        });
 
-        // Evento de clique para abrir o cluster em espiral diretamente
+        // Layer normal para quando houver pesquisa ou item clicado (Sem Cluster)
+        const busLayer = L.featureGroup();
+
         busClusterGroup.on('clusterclick', function (a) {
             a.layer.spiderfy();
         });
 
         let markersRegistry = {}, todosDados = [], amostragemIds = new Set(), modoAmostragem = true, termosBusca = [], dadosTracado = null, linhasTracado = [], itemSelecionado = null, modoLinhaUnica = false, userMarker = null, watchId = null;
+        let clusterAtivo = null;
 
         function initApp() {
             carregarTracado();
@@ -350,6 +353,25 @@
         function renderizarMapa() {
             const temBusca = termosBusca.length > 0, temSelecao = !!itemSelecionado;
             modoAmostragem = !(temBusca || temSelecao);
+            const usarCluster = modoAmostragem; // Cluster apenas quando não há busca nem seleção
+
+            // Alternância dinâmica entre Cluster e Layer direta
+            if (clusterAtivo !== usarCluster) {
+                busClusterGroup.clearLayers();
+                busLayer.clearLayers();
+                markersRegistry = {};
+
+                if (usarCluster) {
+                    if (map.hasLayer(busLayer)) map.removeLayer(busLayer);
+                    if (!map.hasLayer(busClusterGroup)) map.addLayer(busClusterGroup);
+                } else {
+                    if (map.hasLayer(busClusterGroup)) map.removeLayer(busClusterGroup);
+                    if (!map.hasLayer(busLayer)) map.addLayer(busLayer);
+                }
+                clusterAtivo = usarCluster;
+            }
+
+            const alvoLayer = usarCluster ? busClusterGroup : busLayer;
             const validIds = new Set();
             
             todosDados.forEach(feature => {
@@ -378,7 +400,7 @@
 
                 if (!visivel) { 
                     if (markersRegistry[id]) { 
-                        busClusterGroup.removeLayer(markersRegistry[id]); 
+                        alvoLayer.removeLayer(markersRegistry[id]); 
                         delete markersRegistry[id]; 
                     } 
                     return; 
@@ -437,13 +459,14 @@
                         }
                     });
                     
-                    busClusterGroup.addLayer(marker);
+                    alvoLayer.addLayer(marker);
                     markersRegistry[id] = marker;
                 }
             });
+
             for (let id in markersRegistry) {
                 if (!validIds.has(id)) { 
-                    busClusterGroup.removeLayer(markersRegistry[id]); 
+                    alvoLayer.removeLayer(markersRegistry[id]); 
                     delete markersRegistry[id]; 
                 }
             }
